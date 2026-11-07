@@ -1,0 +1,27 @@
+name: Live API
+
+# The unit tests use a stand-in server. This job proves the client still understands the real
+# Pwned Passwords range API. Only a 5-character hash prefix leaves the runner.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 5 * * 1"
+  push:
+    branches: [main]
+    paths:
+      - "src/pwaudit/hibp.py"
+      - "tools/live_check.py"
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - run: pip install -e .
+      - run: python tools/live_check.py

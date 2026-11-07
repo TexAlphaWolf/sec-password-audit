@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: mypy
+      - run: pytest --cov
+
+  windows:
+    name: test (Python 3.14, Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - run: pip install -e ".[dev]"
+      - run: pytest
+
+  evaluation:
+    name: estimator calibration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - run: pip install -e .
+      - name: No estimate may exceed the true search space of a random password
+        run: |
+          python tools/evaluate.py --n 500 | tee eval.txt
+          grep -q "estimates above the true search space: 0 of" eval.txt
+
+  docker:
+    name: docker image
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker build -t pwaudit .
+      - name: Runs as a normal user on a read-only filesystem, password from a pipe
+        run: |
+          [ "$(docker run --rm --entrypoint id pwaudit -u)" != 0 ]
+          printf '%s\n' 'hunter2' | docker run --rm -i --read-only --cap-drop ALL --network none pwaudit check --json --exit-code | tee weak.json || [ $? -eq 3 ]
+          grep -q '"score": 0' weak.json
+          printf '%s\n' 'xK9#mQ2$vL7@pR4' | docker run --rm -i --read-only --cap-drop ALL --network none pwaudit check --exit-code
+      - name: Audit a mounted export, with no network
+        run: |
+          printf 'name,username,password\nBank,luca,Summer2024!\nMail,luca,Summer2024!\n' > export.csv
+          set +e
+          docker run --rm --read-only --cap-drop ALL --network none -v "$PWD/export.csv:/data/export.csv:ro" pwaudit audit export.csv --exit-code | tee audit.txt
+          code=${PIPESTATUS[0]}
+          set -e
+          [ "$code" -eq 3 ]
+          grep -q "Reused" audit.txt
+          ! grep -q "Summer2024" audit.txt
